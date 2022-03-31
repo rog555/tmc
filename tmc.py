@@ -50,14 +50,49 @@ PDQ_CONFIG = {
             )
         }
     },
+    'clustergroup-policies': {
+        'headers': [
+            'fullName.clusterGroupName', 'fullName.name',
+            'spec.type', 'spec.recipe'
+        ],
+        'api_join': {
+            'path': '/v1alpha1/clustergroups',
+            'name_attrs': ['name'],
+            'join_path': '/v1alpha1/clustergroups/{0}/policies',
+            'entity': 'clusterGroups'
+        }
+    },
+    'cluster-namespaces': {
+        'headers': [
+            'fullName.name', 'spec.workspaceName', 'fullName.clusterName'
+        ],
+        'api': {
+            'path': '/v1alpha1/clusters/*/namespaces',
+            'transform': 'namespaces[]'
+        }
+    },
     'organization-policies': {
         'headers': ['fullName.name', 'spec.type', 'spec.recipe'],
         'api': {
             'path': '/v1alpha1/organization/policies',
             'transform': 'policies[]'
         }
+    },
+    'cluster-policy-violations': {
+        'headers': [
+            'id', 'time', 'data.status', 'data.category',
+            'data.policyName', 'data.cluster.name'
+        ],
+        'api': {
+            'path': (
+                '/v1alpha1/events?query='
+                + 'subject:[cluster_policy_violation]'
+                # + 'subject:[cluster_policy_violation] and a.status:NEW'
+            ),
+            'transform': "events[?data.status=='NEW']"
+            # 'transform': "events[]"
+        }
     }
-
 }
 
 
@@ -225,8 +260,9 @@ def api(path, method='GET', **kwargs):
     return data
 
 
-def api_join(path, name_attrs, join_path, cache=False):
-    entity = path.split('?')[0].split('/')[-1]
+def api_join(path, name_attrs, join_path, cache=False, entity=None):
+    if entity is None:
+        entity = path.split('?')[0].split('/')[-1]
     data = []
 
     def _join(d):
@@ -237,6 +273,7 @@ def api_join(path, name_attrs, join_path, cache=False):
             allowed_codes=[200, 404],
             cache='%s-%s-%s' % (entity, join_entity, d[0]) if cache else None
         ))
+
     list(EX.map(lambda _: _join(_), api(
         path,
         transform='%s[].fullName.[%s]' % (entity, ', '.join(name_attrs)),
@@ -249,9 +286,12 @@ def print_table(headers, data, counter=True, sort_key=None, dumpfile=None):
     maxwidth = 40 if len(headers) > 1 else 80
     colwidths = {h: len(h) for h in headers}
     _data = []
-    if len(data) == 0:
+    if not isinstance(data, list) or len(data) == 0:
         print(color.red(' - no data - '))
         return
+    dumpdata = None
+    if dumpfile is not None:
+        dumpdata = json.dumps(data, indent=2)
     if sort_key is not None:
         data = sorted(data, key=lambda k: k[sort_key])
     rc = 0
@@ -309,7 +349,7 @@ def print_table(headers, data, counter=True, sort_key=None, dumpfile=None):
     if dumpfile is not None:
         dumppath = os.path.join(get_temp_basedir(), dumpfile)
         with open(dumppath, 'w') as fh:
-            fh.write(json.dumps(data, indent=2))
+            fh.write(dumpdata)
         print('written %s' % dumppath)
 
 
@@ -363,6 +403,8 @@ if __name__ == "__main__":
         )
 
     else:
+        if not args.url.startswith('/v1alpha1/'):
+            fatal('--url must start /v1alpha1/')
         if args.headers is not None:
             if args.paginate is None:
                 args.paginate = args.url.split('/')[-1]
